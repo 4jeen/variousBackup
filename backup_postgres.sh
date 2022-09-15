@@ -36,25 +36,36 @@ backup () {
   for NM in ${SQL_DATABASE_NAME};do
     BACKUP_SQL_FILE_NAME=`date +"%Y-%m-%dT%H:%M_${NM}.sql.gz"`
     DELETE_SQL_FILE_NAME=`date +"%Y-%m-%dT%H:??_${NM}.sql.gz" -d "${NUMBER_OF_DAYS_TO_HOLD_BACKUPS} day ago"`
-    echo ${NM}
     ${SQL_BACKUP_PROG} -h ${SQL_SERVER_NAME}  ${NM} | gzip  > ${BACKUP_DIR_NAME}/${BACKUP_SQL_FILE_NAME}
     if [ $? -ne 0 ];then
-	return $?
+	    return $?
     fi
     if [ -e ${HOME}/.s3cfg ]; then
 			${S3_SYNC_PROG} put ${BACKUP_DIR_NAME}/${BACKUP_SQL_FILE_NAME}  s3://${S3_BUCKET}/${BACKUP_SQL_FILE_NAME}
     fi
 
-  	if [ -e ${BACKUP_DIR_NAME}/${DELETE_SQL_FILE_NAME} ]; then
-  	  	rm ${BACKUP_DIR_NAME}/${DELETE_SQL_FILE_NAME}
-  	fi
-  	  if [ -e ${HOME}/.s3cfg ] && [ -e ${BACKUP_DIR_NAME}/${DELETE_SQL_FILE_NAME} ]; then
-  	  		${S3_SYNC_PROG} rm s3://${S3_BUCKET}/${DELETE_SQL_FILE_NAME}
-	  fi
   done
 	return $?
 }
 
+deleteobsolete () {
+  EXPIRATIONDATE=`date +"%s" -d "${NUMBER_OF_DAYS_TO_HOLD_BACKUPS} day ago"`
+  for NM in `ls ${BACKUP_DIR_NAME}`;do 
+    DT=`echo $NM|sed -e 's/_[a-z_]\+\.sql\.gz$//g'`
+    SEC=`date +"%s" -d "$DT"`
+    
+    if [ "${EXPIRATIONDATE}" -gt "${SEC}" ]; then
+      echo "need to delete ${NM}"
+      if [ -e ${BACKUP_DIR_NAME}/${NM} ]; then
+        rm "${BACKUP_DIR_NAME}/${NM}"
+      fi  
+      if [ -e ${HOME}/.s3cfg ] && [ -e ${BACKUP_DIR_NAME}/${NM} ]; then
+        ${S3_SYNC_PROG} rm s3://${S3_BUCKET}/${NM}
+      fi
+    fi  
+  done
+
+}
 
 case $1 in
 
@@ -66,7 +77,6 @@ case $1 in
         touch ${TMP_FILE}
         if [ ! -f /tmp/stop_backup ]; then
 		  		backup
-    			echo $?
     	  fi
     	  if [ -f $TMP_FILE ];then
           rm ${TMP_FILE}
@@ -79,11 +89,11 @@ case $1 in
   ;;
 
   "-get")
-		s3cmd get $2 ${BACKUP_DIR_NAME}/$2
+		s3cmd get s3://${S3_BUCKET}/$2 ${BACKUP_DIR_NAME}/$2
   ;;
 
   "-ls")
-	s3cmd ls -r s3://${S3_BUCKET}|egrep  '\.gz|\.bz2'
+	   s3cmd ls -r s3://${S3_BUCKET}|egrep  '\.gz|\.bz2'
     ;;
 
 
